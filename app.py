@@ -10,12 +10,18 @@ YOUR TASK: Convert this to use rq for background processing!
 from flask import Flask, jsonify, request
 import time
 import uuid
+import os 
 from datetime import datetime
+from redis import Redis
+from tasks import send_notification
+from rq.job import Job
+
 
 app = Flask(__name__)
 
 # In-memory store for notifications
 notifications = {}
+redis_conn = Redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
 
 
 def send_notification_sync(notification_id, email, message):
@@ -25,20 +31,43 @@ def send_notification_sync(notification_id, email, message):
     In production, this would call an email service like Mailgun.
     We simulate the slow API with time.sleep().
     """
-    print(f"[Sending] Notification {notification_id} to {email}...")
+    # print(f"[Sending] Notification {notification_id} to {email}...")
 
     # This is the problem - blocking for 3 seconds!
-    time.sleep(3)
+    # time.sleep(3)
 
-    sent_at = datetime.utcnow().isoformat() + "Z"
-    print(f"[Sent] Notification {notification_id} at {sent_at}")
+    # sent_at = datetime.utcnow().isoformat() + "Z"
+    # print(f"[Sent] Notification {notification_id} at {sent_at}")
 
+    # return {
+    #     "notification_id": notification_id,
+    #     "email": email,
+    #     "status": "sent",
+    #     "sent_at": sent_at
+    # }
+    job = send_notification.delay(notification_id, message, email)
     return {
-        "notification_id": notification_id,
-        "email": email,
-        "status": "sent",
-        "sent_at": sent_at
+        "job_id": job.id
+    }, 202
+
+@app.route('/jobs/<job_id>', methods = ['GET'])
+def get_job(job_id):
+    try:
+        job = Job.fetch(job_id, connection=redis_conn)
+    except Exception:
+        return {"error": "Job not found"}, 404
+    response = {
+        "job_id": job_id,
+        "status": job.get_status()
     }
+
+    if job.is_finished:
+        response["result"] = job.result
+    elif job.is_failed:
+        response["error"] = str(job.exc_info)
+
+    return response
+
 
 
 @app.route('/')
